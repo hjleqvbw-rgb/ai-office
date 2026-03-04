@@ -1,7 +1,12 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  /* config options here */
-};
+  experimental: {
+    // Allow longer streaming responses
+  },
+  turbopack: {
+    root: __dirname,
+  },
+}
 
-export default nextConfig;
+export default nextConfig

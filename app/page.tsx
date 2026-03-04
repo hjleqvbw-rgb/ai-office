@@ -1,24 +1,19 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
-import { AgentId, AgentState, AgentEvent, TaskState } from '@/types'
+import { AgentId, AgentState, AgentEvent, TaskState, AgentStep } from '@/types'
 import { AGENT_CONFIGS, getAgentNames, saveAgentNames } from '@/constants/agentConfig'
 import PublicChannel from '@/components/Chat/PublicChannel'
 import DMPanel from '@/components/Chat/DMPanel'
 import TaskPanel from '@/components/TaskPanel'
 
-// Dynamically import canvas to avoid SSR issues
 const OfficeCanvas = dynamic(() => import('@/components/Office/OfficeCanvas'), { ssr: false })
 
 type AgentStates = Record<AgentId, AgentState>
 
-const DEFAULT_AGENT_STATES: AgentStates = {
-  manager: 'idle',
-  coder: 'idle',
-  qa: 'idle',
-  designer: 'idle',
-  scribe: 'idle',
-  uxTester: 'idle',
+const DEFAULT_STATES: AgentStates = {
+  manager: 'idle', coder: 'idle', qa: 'idle',
+  designer: 'idle', scribe: 'idle', uxTester: 'idle',
 }
 
 interface SpeechBubble {
@@ -32,151 +27,157 @@ export default function Home() {
     manager: 'Alex', coder: 'Dev', qa: 'Tester',
     designer: 'Aria', scribe: 'Memo', uxTester: 'Uma',
   })
-  const [agentStates, setAgentStates] = useState<AgentStates>(DEFAULT_AGENT_STATES)
+  const [agentStates, setAgentStates] = useState<AgentStates>(DEFAULT_STATES)
   const [speechBubbles, setSpeechBubbles] = useState<SpeechBubble[]>([])
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [taskState, setTaskState] = useState<TaskState | null>(null)
   const [isRunning, setIsRunning] = useState(false)
-  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null)
+  const [currentTaskId] = useState<string | null>(null)
   const [dmAgent, setDmAgent] = useState<AgentId | null>(null)
   const [latestSummary, setLatestSummary] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
 
-  const sseRef = useRef<EventSource | null>(null)
-
-  // Load saved agent names on mount
   useEffect(() => {
-    const saved = getAgentNames()
-    setAgentNames(saved)
+    setAgentNames(getAgentNames())
   }, [])
 
-  const addSpeechBubble = useCallback((agentId: AgentId, text: string) => {
-    const shortText = text.length > 120 ? text.slice(0, 117) + '...' : text
+  const setAgent = useCallback((id: AgentId, state: AgentState) => {
+    setAgentStates(prev => ({ ...prev, [id]: state }))
+  }, [])
+
+  const addBubble = useCallback((agentId: AgentId, text: string) => {
     setSpeechBubbles(prev => [
       ...prev.filter(b => b.agentId !== agentId),
-      { agentId, text: shortText, expiresAt: Date.now() + 5000 },
+      { agentId, text: text.slice(0, 100), expiresAt: Date.now() + 5000 },
     ])
   }, [])
 
-  const setAgentState = useCallback((agentId: AgentId, state: AgentState) => {
-    setAgentStates(prev => ({ ...prev, [agentId]: state }))
-  }, [])
-
   const handleEvent = useCallback((event: AgentEvent) => {
+    // Skip the completedSteps payload event (it's JSON, not display text)
+    if (event.type === 'complete' && event.to === 'user' && event.content.startsWith('[')) {
+      try {
+        const steps: AgentStep[] = JSON.parse(event.content)
+        setTaskState(prev => prev ? { ...prev, completedSteps: steps, status: 'completed' } : prev)
+      } catch { /* ignore */ }
+      return
+    }
+
     setEvents(prev => [...prev, event])
 
-    const agentId = event.from as AgentId
-    if (!['manager','coder','qa','designer','scribe','uxTester'].includes(agentId)) return
+    const id = event.from as AgentId
+    const isAgent = AGENT_CONFIGS.some(a => a.id === id)
+    if (!isAgent) return
 
     switch (event.type) {
       case 'status':
-        setAgentState(agentId, 'thinking')
+        setAgent(id, 'thinking')
         break
       case 'message':
-        setAgentState(agentId, 'talking')
-        addSpeechBubble(agentId, event.content.slice(0, 100))
-        setTimeout(() => setAgentState(agentId, 'idle'), 4000)
+        setAgent(id, 'talking')
+        addBubble(id, event.content)
+        setTimeout(() => setAgent(id, 'idle'), 4000)
         break
       case 'task_assign':
-        setAgentState('manager', 'talking')
-        addSpeechBubble('manager', '任務分派中...')
-        setTimeout(() => setAgentState('manager', 'idle'), 3000)
+        setAgent('manager', 'talking')
+        addBubble('manager', '任務分派中...')
+        setTimeout(() => setAgent('manager', 'idle'), 3000)
+        // Parse planned steps from content
+        setTaskState(prev => {
+          if (!prev) return prev
+          const lines = event.content.split('\n').slice(1)
+          const planned = lines.map((l, i) => {
+            const match = l.match(/\d+\. (.+?): (.+)/)
+            const agentName = match?.[1] ?? ''
+            const task = match?.[2] ?? l
+            const agentId = (AGENT_CONFIGS.find(a =>
+              (prev ? agentNames[a.id] : a.defaultName) === agentName
+            )?.id ?? 'coder') as AgentId
+            return { agent: agentId, task, priority: i + 1 }
+          })
+          return { ...prev, plannedSteps: planned }
+        })
         break
       case 'complete':
         setLatestSummary(event.content)
-        AGENT_CONFIGS.forEach(a => setAgentState(a.id, 'done'))
+        AGENT_CONFIGS.forEach(a => setAgent(a.id, 'done'))
         setIsRunning(false)
         setTaskState(prev => prev ? { ...prev, status: 'completed', latestSummary: event.content } : prev)
         break
       case 'error':
-        setAgentState(agentId, 'idle')
+        setAgent(id, 'idle')
         setIsRunning(false)
         break
       case 'paused':
-        AGENT_CONFIGS.forEach(a => setAgentState(a.id, 'resting'))
+        AGENT_CONFIGS.forEach(a => setAgent(a.id, 'resting'))
         break
       case 'resumed':
-        AGENT_CONFIGS.forEach(a => setAgentState(a.id, 'idle'))
+        AGENT_CONFIGS.forEach(a => setAgent(a.id, 'idle'))
         break
     }
-
-    // Update task state for progress tracking
-    if (event.type === 'message' && agentId !== 'scribe') {
-      setTaskState(prev => {
-        if (!prev) return prev
-        const stepIndex = prev.plannedSteps.findIndex(s => s.agent === agentId)
-        if (stepIndex === -1) return prev
-        const alreadyDone = prev.completedSteps.some(s => s.agentId === agentId && s.task === prev.plannedSteps[stepIndex]?.task)
-        if (alreadyDone) return prev
-        return {
-          ...prev,
-          currentStepIndex: stepIndex + 1,
-          completedSteps: [...prev.completedSteps, {
-            agentId,
-            task: prev.plannedSteps[stepIndex]?.task ?? '',
-            output: event.content,
-            completedAt: Date.now(),
-          }],
-        }
-      })
-    }
-  }, [addSpeechBubble, setAgentState])
+  }, [addBubble, setAgent, agentNames])
 
   const startTask = useCallback(async (task: string) => {
-    // Close existing SSE
-    if (sseRef.current) {
-      sseRef.current.close()
-      sseRef.current = null
-    }
+    abortRef.current?.abort()
+    const abort = new AbortController()
+    abortRef.current = abort
 
     setEvents([])
     setIsRunning(true)
     setLatestSummary('')
-    AGENT_CONFIGS.forEach(a => setAgentState(a.id, 'idle'))
+    AGENT_CONFIGS.forEach(a => setAgent(a.id, 'idle'))
+
+    const taskId = `task-${Date.now()}`
+    setTaskState({
+      taskId,
+      originalTask: task,
+      currentStepIndex: 0,
+      plannedSteps: [],
+      completedSteps: [],
+      latestSummary: '',
+      status: 'running',
+      createdAt: Date.now(),
+    })
 
     try {
-      const res = await fetch('/api/task', {
+      const res = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ task, agentNames }),
+        signal: abort.signal,
       })
-      const { taskId, error } = await res.json()
 
-      if (error || !taskId) {
+      if (!res.ok || !res.body) {
         setIsRunning(false)
         return
       }
 
-      setCurrentTaskId(taskId)
-      setTaskState({
-        taskId,
-        originalTask: task,
-        currentStepIndex: 0,
-        plannedSteps: [],
-        completedSteps: [],
-        latestSummary: '',
-        status: 'running',
-        createdAt: Date.now(),
-      })
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
 
-      // Connect SSE
-      const sse = new EventSource(`/api/stream/${taskId}`)
-      sseRef.current = sse
-
-      sse.onmessage = (e) => {
-        try {
-          const event: AgentEvent = JSON.parse(e.data)
-          handleEvent(event)
-        } catch {}
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line || line === '') continue
+          try {
+            const event: AgentEvent = JSON.parse(line)
+            handleEvent(event)
+          } catch { /* skip malformed */ }
+        }
       }
-
-      sse.onerror = () => {
-        sse.close()
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
         setIsRunning(false)
       }
-    } catch {
+    } finally {
       setIsRunning(false)
     }
-  }, [agentNames, handleEvent, setAgentState])
+  }, [agentNames, handleEvent, setAgent])
 
   const handleNameChange = useCallback((agentId: AgentId, name: string) => {
     const updated = { ...agentNames, [agentId]: name }
@@ -184,42 +185,37 @@ export default function Home() {
     saveAgentNames(updated)
   }, [agentNames])
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => { sseRef.current?.close() }
-  }, [])
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
-      {/* Header */}
       <header className="border-b border-gray-800 px-4 py-2 flex items-center gap-3">
         <span className="text-xl">🏢</span>
         <h1 className="font-bold text-white">AI Office</h1>
         <span className="text-gray-600 text-xs">虛擬 AI 辦公室</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-gray-500">
-          {isRunning && <span className="text-blue-400 flex items-center gap-1"><span className="animate-pulse">●</span> 運行中</span>}
+          {isRunning && (
+            <span className="text-blue-400 flex items-center gap-1">
+              <span className="animate-pulse">●</span> 運行中
+            </span>
+          )}
           <span>點擊 Agent 可私訊</span>
         </div>
       </header>
 
-      {/* Canvas */}
       <div className="px-4 pt-3 pb-2">
         <OfficeCanvas
           agentStates={agentStates}
           speechBubbles={speechBubbles}
           agentNames={agentNames}
-          onAgentClick={(agentId) => setDmAgent(agentId)}
+          onAgentClick={setDmAgent}
         />
       </div>
 
-      {/* Bottom panels */}
       <div className="flex-1 flex gap-3 px-4 pb-4 min-h-0" style={{ height: '380px' }}>
-        {/* Public channel */}
         <div className="flex-1 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
           <PublicChannel events={events} agentNames={agentNames} />
         </div>
-
-        {/* Task panel */}
         <div className="w-80 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
           <TaskPanel
             onSubmit={startTask}
@@ -230,7 +226,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* DM Panel */}
       {dmAgent && (
         <DMPanel
           agentId={dmAgent}
