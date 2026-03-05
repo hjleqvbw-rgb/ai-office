@@ -57,10 +57,53 @@ export async function POST(req: NextRequest) {
         const managerOut = await callAgent('manager', task)
 
         let subTasks: SubTask[] = []
+        let parsedManager: {
+          chat?: boolean; response?: string
+          introduce?: boolean
+          confirm?: boolean; question?: string
+          tasks?: SubTask[]
+        } = {}
         try {
           const json = managerOut.match(/\{[\s\S]*\}/)
-          if (json) subTasks = JSON.parse(json[0]).tasks ?? []
+          if (json) parsedManager = JSON.parse(json[0])
         } catch { /* fallback below */ }
+
+        // 1a. 閒聊 — Alex 回一句話，結束
+        if (parsedManager.chat === true) {
+          emitMsg('manager', 'all', parsedManager.response ?? managerOut)
+          send({ type: 'complete', from: 'scribe', to: 'all', content: '' })
+          send({ type: 'complete', from: 'scribe', to: 'user', content: JSON.stringify([]) })
+          return
+        }
+
+        // 1b. 自我介紹 — 每個 Agent 各說一下自己是誰
+        if (parsedManager.introduce === true) {
+          emitMsg('manager', 'all', `好！讓大家來自我介紹一下 👋`)
+          const introAgents: AgentId[] = ['coder', 'qa', 'designer', 'scribe', 'uxTester']
+          for (const agentId of introAgents) {
+            const name = agentNames[agentId] ?? agentId
+            emitStatus(agentId, `${name} 準備介紹自己...`)
+            // 用 agent 本身的 system prompt + intro 指令，讓角色個性自然呈現
+            const intro = await runAgent(
+              SYSTEM_PROMPTS[agentId as keyof typeof SYSTEM_PROMPTS],
+              SYSTEM_PROMPTS.intro
+            )
+            emitMsg(agentId, 'all', intro)
+          }
+          send({ type: 'complete', from: 'scribe', to: 'all', content: '' })
+          send({ type: 'complete', from: 'scribe', to: 'user', content: JSON.stringify([]) })
+          return
+        }
+
+        // 1c. 需要確認 — Alex 問用戶問題，等下一輪回覆
+        if (parsedManager.confirm === true) {
+          emitMsg('manager', 'all', parsedManager.question ?? '可以多說一點你想做什麼嗎？')
+          send({ type: 'complete', from: 'scribe', to: 'all', content: '' })
+          send({ type: 'complete', from: 'scribe', to: 'user', content: JSON.stringify([]) })
+          return
+        }
+
+        subTasks = parsedManager.tasks ?? []
         if (!subTasks.length) {
           subTasks = [
             { agent: 'designer', task, priority: 1 },

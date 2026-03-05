@@ -35,7 +35,51 @@ export default function Home() {
   const [currentTaskId] = useState<string | null>(null)
   const [dmAgent, setDmAgent] = useState<AgentId | null>(null)
   const [latestSummary, setLatestSummary] = useState('')
+  const [clearing, setClearing] = useState(false)
+  const [showTaskPanel, setShowTaskPanel] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+
+  const clearChannel = useCallback(async () => {
+    if (clearing || isRunning || events.length === 0) return
+    setClearing(true)
+    try {
+      // Ask Scribe to summarize before clearing
+      const conversation = events
+        .filter(e => e.type === 'message' || e.type === 'task_assign' || e.type === 'complete')
+        .map(e => `[${agentNames[e.from as AgentId] ?? e.from}] ${e.content}`)
+        .join('\n\n')
+
+      const res = await fetch('/api/dm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'archive',
+          agentId: 'scribe',
+          message: `請為以下對話做一份完整摘要，保留所有重要資訊、決策、程式碼片段：\n\n${conversation}`,
+          agentNames,
+          summary: latestSummary,
+        }),
+      })
+      const { response } = await res.json()
+
+      // Save to localStorage with timestamp
+      const key = 'ai-office-archives'
+      const existing = JSON.parse(localStorage.getItem(key) ?? '[]')
+      existing.unshift({
+        id: Date.now(),
+        savedAt: new Date().toLocaleString('zh-TW'),
+        summary: response ?? '（無摘要）',
+        messageCount: events.length,
+      })
+      localStorage.setItem(key, JSON.stringify(existing.slice(0, 20))) // keep last 20
+
+      setEvents([])
+      setTaskState(null)
+      setLatestSummary('')
+    } finally {
+      setClearing(false)
+    }
+  }, [clearing, isRunning, events, agentNames, latestSummary])
 
   useEffect(() => {
     setAgentNames(getAgentNames())
@@ -188,22 +232,22 @@ export default function Home() {
   useEffect(() => () => abortRef.current?.abort(), [])
 
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col">
-      <header className="border-b border-gray-800 px-4 py-2 flex items-center gap-3">
+    <div className="bg-gray-950 flex flex-col min-h-screen md:h-screen md:overflow-hidden">
+      <header className="border-b border-gray-800 px-4 py-2 flex items-center gap-3 shrink-0">
         <span className="text-xl">🏢</span>
         <h1 className="font-bold text-white">AI Office</h1>
-        <span className="text-gray-600 text-xs">虛擬 AI 辦公室</span>
+        <span className="text-gray-600 text-xs hidden sm:inline">虛擬 AI 辦公室</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-gray-500">
           {isRunning && (
             <span className="text-blue-400 flex items-center gap-1">
               <span className="animate-pulse">●</span> 運行中
             </span>
           )}
-          <span>點擊 Agent 可私訊</span>
+          <span className="hidden sm:inline">點擊 Agent 可私訊</span>
         </div>
       </header>
 
-      <div className="px-4 pt-3 pb-2">
+      <div className="px-3 pt-2 pb-1 md:px-4 md:pt-3 md:pb-2 shrink-0">
         <OfficeCanvas
           agentStates={agentStates}
           speechBubbles={speechBubbles}
@@ -212,16 +256,67 @@ export default function Home() {
         />
       </div>
 
-      <div className="flex-1 flex gap-3 px-4 pb-4 min-h-0" style={{ height: '380px' }}>
-        <div className="flex-1 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
-          <PublicChannel events={events} agentNames={agentNames} />
+      {/* Desktop: side-by-side | Mobile: channel full width */}
+      <div className="flex md:flex-1 gap-3 px-3 pb-3 md:px-4 md:pb-4 md:min-h-0 flex-1 min-h-0">
+        {/* Public channel — full width on mobile, flex-1 on desktop */}
+        <div className="flex-1 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden min-h-0">
+          <PublicChannel
+            events={events}
+            agentNames={agentNames}
+            onClear={clearChannel}
+            clearing={clearing}
+          />
         </div>
-        <div className="w-80 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
+
+        {/* Desktop: always visible side panel */}
+        <div className="hidden md:block md:w-80 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
           <TaskPanel
             onSubmit={startTask}
             taskState={taskState}
             isRunning={isRunning}
             agentNames={agentNames}
+          />
+        </div>
+      </div>
+
+      {/* Mobile: floating tab button (right edge) */}
+      <button
+        className="md:hidden fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-gray-800 border border-gray-700 border-r-0 rounded-l-xl py-5 px-1.5 flex flex-col items-center gap-1 shadow-lg"
+        onClick={() => setShowTaskPanel(true)}
+        aria-label="開啟任務看板"
+      >
+        <span className="text-base">📋</span>
+        {isRunning && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />}
+        {taskState && !isRunning && taskState.status === 'completed' && (
+          <span className="w-2 h-2 rounded-full bg-green-400" />
+        )}
+      </button>
+
+      {/* Mobile: task panel overlay */}
+      {showTaskPanel && (
+        <div
+          className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={() => setShowTaskPanel(false)}
+        />
+      )}
+      <div className={`md:hidden fixed inset-y-0 right-0 z-50 w-[85vw] max-w-sm bg-gray-900 border-l border-gray-700 shadow-2xl flex flex-col transition-transform duration-300 ease-out ${showTaskPanel ? 'translate-x-0' : 'translate-x-full'}`}>
+        {/* Panel header with close */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 shrink-0">
+          <span className="text-white font-semibold text-sm">📋 任務看板</span>
+          <button
+            onClick={() => setShowTaskPanel(false)}
+            className="text-gray-500 hover:text-white text-lg leading-none px-1"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <TaskPanel
+            onSubmit={(task) => { startTask(task); setShowTaskPanel(false) }}
+            taskState={taskState}
+            isRunning={isRunning}
+            agentNames={agentNames}
+            hideHeader
           />
         </div>
       </div>

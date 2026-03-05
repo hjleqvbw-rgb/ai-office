@@ -5,6 +5,8 @@ import { AgentEvent, AgentId } from '@/types'
 interface Props {
   events: AgentEvent[]
   agentNames: Record<AgentId, string>
+  onClear?: () => void
+  clearing?: boolean
 }
 
 const AGENT_EMOJI: Record<string, string> = {
@@ -20,7 +22,7 @@ const TYPE_LABELS: Record<string, string> = {
   paused: '⏸ 暫停', resumed: '▶ 恢復', dm_reply: '💬 私訊', status: '', message: '',
 }
 
-export default function PublicChannel({ events, agentNames }: Props) {
+export default function PublicChannel({ events, agentNames, onClear, clearing }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const [unread, setUnread] = useState(0)
@@ -61,6 +63,16 @@ export default function PublicChannel({ events, agentNames }: Props) {
         <span className="text-green-400">●</span>
         <span className="font-semibold text-white text-sm">公共頻道</span>
         <span className="text-gray-500 text-xs ml-auto">{events.length} 則訊息</span>
+        {onClear && events.length > 0 && (
+          <button
+            onClick={onClear}
+            disabled={clearing}
+            title="讓 Memo 儲存摘要後清除頻道"
+            className="text-gray-500 hover:text-red-400 disabled:opacity-40 transition-colors text-xs px-1.5 py-0.5 rounded"
+          >
+            {clearing ? '📝...' : '🗑'}
+          </button>
+        )}
       </div>
 
       {/* Scrollable message list */}

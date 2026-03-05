@@ -7,9 +7,10 @@ interface Props {
   taskState: TaskState | null
   isRunning: boolean
   agentNames: Record<AgentId, string>
+  hideHeader?: boolean
 }
 
-export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames }: Props) {
+export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames, hideHeader }: Props) {
   const [input, setInput] = useState('')
   const [showOutput, setShowOutput] = useState(false)
 
@@ -24,15 +25,17 @@ export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700">
-        <span className="text-yellow-400">📋</span>
-        <span className="font-semibold text-white text-sm">任務看板</span>
-        {isRunning && (
-          <span className="ml-auto flex items-center gap-1 text-xs text-blue-400">
-            <span className="animate-pulse">●</span> 運行中
-          </span>
-        )}
-      </div>
+      {!hideHeader && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700">
+          <span className="text-yellow-400">📋</span>
+          <span className="font-semibold text-white text-sm">任務看板</span>
+          {isRunning && (
+            <span className="ml-auto flex items-center gap-1 text-xs text-blue-400">
+              <span className="animate-pulse">●</span> 運行中
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {/* Progress */}
@@ -129,8 +132,8 @@ export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames }
         <div className="space-y-2">
           <textarea
             className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded-lg outline-none border border-gray-700 focus:border-blue-500 placeholder-gray-600 resize-none"
-            placeholder="輸入你的任務... (例如: 幫我做一個登入頁面)"
-            rows={3}
+            placeholder="輸入任務或跟 Alex 說話..."
+            rows={2}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
