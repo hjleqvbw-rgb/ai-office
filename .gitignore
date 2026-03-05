@@ -35,3 +35,9 @@ next-env.d.ts
 
 # tasks (runtime state, not for git)
 /tasks/
+
+# workspace generated files (agent CLAUDE.md memories are kept in git)
+workspace/*/node_modules
+workspace/*/__pycache__
+workspace/*/.pytest_cache
+workspace/*/*.pyc

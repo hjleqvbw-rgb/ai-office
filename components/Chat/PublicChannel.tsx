@@ -52,6 +52,9 @@ export default function PublicChannel({ events, agentNames, onClear, clearing }:
     isAtBottomRef.current = true
   }
 
+  const stripCode = (text: string) =>
+    text.replace(/```[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim()
+
   const getDisplayName = (id: string) => id === 'user' ? '你' : (agentNames[id as AgentId] ?? id)
   const formatTime = (ts: number) =>
     new Date(ts).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -119,7 +122,7 @@ export default function PublicChannel({ events, agentNames, onClear, clearing }:
                 <span className="text-gray-600 text-xs ml-auto">{formatTime(event.timestamp)}</span>
               </div>
               <div className="text-gray-300 text-xs leading-relaxed whitespace-pre-wrap break-words">
-                {event.content}
+                {event.type === 'message' ? stripCode(event.content) : event.content}
               </div>
             </div>
           )

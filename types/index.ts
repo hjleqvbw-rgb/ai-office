@@ -31,6 +31,7 @@ export interface TaskState {
   plannedSteps: SubTask[]
   completedSteps: AgentStep[]
   latestSummary: string
+  projectDir?: string
   pausedAt?: number
   resumeAt?: number
   status: 'running' | 'paused' | 'completed' | 'error'

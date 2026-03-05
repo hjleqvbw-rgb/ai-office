@@ -71,12 +71,30 @@ export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames, 
 
             {/* Show output toggle */}
             {taskState.status === 'completed' && (
-              <button
-                onClick={() => setShowOutput(!showOutput)}
-                className="w-full text-xs text-blue-400 hover:text-blue-300 py-1 border border-blue-800/50 rounded hover:border-blue-600/50 transition-colors"
-              >
-                {showOutput ? '▲ 收起成果' : '▼ 查看成果'}
-              </button>
+              <div className="space-y-1.5">
+                <button
+                  onClick={() => setShowOutput(!showOutput)}
+                  className="w-full text-xs text-blue-400 hover:text-blue-300 py-1 border border-blue-800/50 rounded hover:border-blue-600/50 transition-colors"
+                >
+                  {showOutput ? '▲ 收起成果' : '▼ 查看成果'}
+                </button>
+                {taskState.projectDir && (
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => fetch(`/api/open-dir?path=${encodeURIComponent(taskState.projectDir!)}`)}
+                      className="flex-1 text-xs bg-blue-800/40 hover:bg-blue-700/40 text-blue-300 py-1 rounded border border-blue-800/50 transition-colors"
+                    >
+                      📂 Finder
+                    </button>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(taskState.projectDir!)}
+                      className="flex-1 text-xs bg-gray-700/50 hover:bg-gray-600/50 text-gray-300 py-1 rounded border border-gray-600/50 transition-colors"
+                    >
+                      📋 複製路徑
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -96,6 +114,13 @@ export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames, 
                 </div>
               )
             })}
+
+            {/* Path display */}
+            {taskState.projectDir && (
+              <div className="text-xs text-gray-500 break-all bg-gray-950 rounded p-1.5 font-mono">
+                {taskState.projectDir}
+              </div>
+            )}
 
             {/* Download button */}
             <button

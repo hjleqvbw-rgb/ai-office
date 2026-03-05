@@ -98,10 +98,16 @@ export default function Home() {
 
   const handleEvent = useCallback((event: AgentEvent) => {
     // Skip the completedSteps payload event (it's JSON, not display text)
-    if (event.type === 'complete' && event.to === 'user' && event.content.startsWith('[')) {
+    if (event.type === 'complete' && event.to === 'user' &&
+        (event.content.startsWith('[') || event.content.startsWith('{'))) {
       try {
-        const steps: AgentStep[] = JSON.parse(event.content)
-        setTaskState(prev => prev ? { ...prev, completedSteps: steps, status: 'completed' } : prev)
+        if (event.content.startsWith('[')) {
+          const steps: AgentStep[] = JSON.parse(event.content)
+          setTaskState(prev => prev ? { ...prev, completedSteps: steps, status: 'completed' } : prev)
+        } else {
+          const { steps, projectDir } = JSON.parse(event.content) as { steps: AgentStep[], projectDir: string }
+          setTaskState(prev => prev ? { ...prev, completedSteps: steps, status: 'completed', projectDir } : prev)
+        }
       } catch { /* ignore */ }
       return
     }
