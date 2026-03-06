@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
-import { AgentId, AgentState, AgentEvent, TaskState, AgentStep } from '@/types'
+import { AgentId, AgentState, AgentEvent, TaskState, AgentStep, SubTask } from '@/types'
 import { AGENT_CONFIGS, getAgentNames, saveAgentNames } from '@/constants/agentConfig'
 import PublicChannel from '@/components/Chat/PublicChannel'
 import DMPanel from '@/components/Chat/DMPanel'
@@ -37,6 +37,7 @@ export default function Home() {
   const [latestSummary, setLatestSummary] = useState('')
   const [clearing, setClearing] = useState(false)
   const [showTaskPanel, setShowTaskPanel] = useState(false)
+  const [pendingPlan, setPendingPlan] = useState<{ summary: string; tasks: SubTask[] } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const clearChannel = useCallback(async () => {
@@ -97,6 +98,15 @@ export default function Home() {
   }, [])
 
   const handleEvent = useCallback((event: AgentEvent) => {
+    // Plan confirmation event — store for TaskPanel confirm UI
+    if (event.type === 'plan') {
+      try {
+        const plan = JSON.parse(event.content) as { summary: string; tasks: SubTask[] }
+        setPendingPlan(plan)
+      } catch { /* ignore */ }
+      return
+    }
+
     // Skip the completedSteps payload event (it's JSON, not display text)
     if (event.type === 'complete' && event.to === 'user' &&
         (event.content.startsWith('[') || event.content.startsWith('{'))) {
@@ -166,12 +176,13 @@ export default function Home() {
     }
   }, [addBubble, setAgent, agentNames])
 
-  const startTask = useCallback(async (task: string) => {
+  const startTask = useCallback(async (task: string, approvedTasks?: SubTask[]) => {
     abortRef.current?.abort()
     const abort = new AbortController()
     abortRef.current = abort
 
     setEvents([])
+    setPendingPlan(null)
     setIsRunning(true)
     setLatestSummary('')
     AGENT_CONFIGS.forEach(a => setAgent(a.id, 'idle'))
@@ -192,7 +203,7 @@ export default function Home() {
       const res = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, agentNames }),
+        body: JSON.stringify({ task, agentNames, ...(approvedTasks ? { approvedTasks } : {}) }),
         signal: abort.signal,
       })
 
@@ -278,6 +289,9 @@ export default function Home() {
         <div className="hidden md:block md:w-80 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
           <TaskPanel
             onSubmit={startTask}
+            onConfirmPlan={(tasks) => taskState && startTask(taskState.originalTask, tasks)}
+            onClearPlan={() => setPendingPlan(null)}
+            pendingPlan={pendingPlan}
             taskState={taskState}
             isRunning={isRunning}
             agentNames={agentNames}
@@ -319,6 +333,9 @@ export default function Home() {
         <div className="flex-1 overflow-hidden">
           <TaskPanel
             onSubmit={(task) => { startTask(task); setShowTaskPanel(false) }}
+            onConfirmPlan={(tasks) => { taskState && startTask(taskState.originalTask, tasks); setShowTaskPanel(false) }}
+            onClearPlan={() => setPendingPlan(null)}
+            pendingPlan={pendingPlan}
             taskState={taskState}
             isRunning={isRunning}
             agentNames={agentNames}

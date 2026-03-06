@@ -1,16 +1,19 @@
 'use client'
 import { useState } from 'react'
-import { TaskState, AgentId } from '@/types'
+import { TaskState, AgentId, SubTask } from '@/types'
 
 interface Props {
   onSubmit: (task: string) => void
+  onConfirmPlan: (tasks: SubTask[]) => void
+  onClearPlan: () => void
+  pendingPlan: { summary: string; tasks: SubTask[] } | null
   taskState: TaskState | null
   isRunning: boolean
   agentNames: Record<AgentId, string>
   hideHeader?: boolean
 }
 
-export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames, hideHeader }: Props) {
+export default function TaskPanel({ onSubmit, onConfirmPlan, onClearPlan, pendingPlan, taskState, isRunning, agentNames, hideHeader }: Props) {
   const [input, setInput] = useState('')
   const [showOutput, setShowOutput] = useState(false)
 
@@ -38,6 +41,37 @@ export default function TaskPanel({ onSubmit, taskState, isRunning, agentNames, 
       )}
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+
+        {/* Plan confirmation */}
+        {pendingPlan && !isRunning && (
+          <div className="bg-blue-950/60 border border-blue-700/60 rounded-lg p-3 space-y-3">
+            <div className="text-xs text-blue-300 font-semibold">📋 Alex 的計劃，請確認</div>
+            <div className="text-xs text-gray-300 leading-relaxed">{pendingPlan.summary}</div>
+            <div className="space-y-1">
+              {pendingPlan.tasks.map((t, i) => (
+                <div key={i} className="text-xs text-gray-400 flex gap-1.5">
+                  <span className="text-blue-500 shrink-0">{i + 1}.</span>
+                  <span><span className="text-blue-400">[{agentNames[t.agent as AgentId] ?? t.agent}]</span> {t.task}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onConfirmPlan(pendingPlan.tasks)}
+                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-lg transition-colors font-medium"
+              >
+                ✓ 確認，開始工作
+              </button>
+              <button
+                onClick={onClearPlan}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs py-2 rounded-lg transition-colors"
+              >
+                ✎ 重新說明
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Progress */}
         {taskState && (
           <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">

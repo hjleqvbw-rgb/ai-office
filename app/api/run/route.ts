@@ -15,9 +15,10 @@ const execAsync = promisify(exec)
 const CLAUDE_AGENTS: AgentId[] = ['coder', 'qa', 'designer', 'scribe', 'uxTester']
 
 export async function POST(req: NextRequest) {
-  const { task, agentNames } = await req.json() as {
+  const { task, agentNames, approvedTasks } = await req.json() as {
     task: string
     agentNames: Record<AgentId, string>
+    approvedTasks?: SubTask[]
   }
 
   const encoder = new TextEncoder()
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
           chat?: boolean; response?: string
           introduce?: boolean
           confirm?: boolean; question?: string
-          tasks?: SubTask[]
+          tasks?: SubTask[]; planSummary?: string
         } = {}
         try {
           const json = managerOut.match(/\{[\s\S]*\}/)
@@ -107,13 +108,29 @@ export async function POST(req: NextRequest) {
 
         // ── 正式任務 ──
 
-        subTasks = parsedManager.tasks ?? []
-        if (!subTasks.length) {
-          subTasks = [
-            { agent: 'designer', task, priority: 1 },
-            { agent: 'coder', task, priority: 2 },
-            { agent: 'qa', task, priority: 3 },
-          ]
+        // 如果用戶已確認計劃，直接用；否則先送計劃讓用戶確認
+        if (approvedTasks?.length) {
+          subTasks = approvedTasks
+        } else {
+          subTasks = parsedManager.tasks ?? []
+          if (!subTasks.length) {
+            subTasks = [
+              { agent: 'designer', task, priority: 1 },
+              { agent: 'coder', task, priority: 2 },
+              { agent: 'qa', task, priority: 3 },
+            ]
+          }
+
+          // 送計劃給用戶確認，然後停止（等用戶按「確認」再重新提交）
+          const planSummary = parsedManager.planSummary
+            ?? `我理解你要：${task.slice(0, 80)}。分派給 ${subTasks.map(t => agentNames[t.agent as AgentId] ?? t.agent).join(' → ')}。`
+          emitMsg('manager', 'all',
+            `📋 動工前先確認計劃：\n\n${planSummary}\n\n分派方式：\n${subTasks.map((t, i) =>
+              `${i + 1}. ${agentNames[t.agent as AgentId] ?? t.agent}：${t.task}`).join('\n')}`)
+          send({ type: 'plan', from: 'manager', to: 'user', content: JSON.stringify({ summary: planSummary, tasks: subTasks }) })
+          send({ type: 'complete', from: 'scribe', to: 'all', content: '' })
+          send({ type: 'complete', from: 'scribe', to: 'user', content: JSON.stringify({ steps: [], projectDir: '' }) })
+          return
         }
 
         // 建立共用專案目錄（所有 Agent 都在這裡工作）
@@ -153,9 +170,50 @@ export async function POST(req: NextRequest) {
             projectDir
           )
           emitMsg(agentId, 'all', output)
-
           completedSteps.push({ agentId, task: subTask.task, output, completedAt: Date.now() })
           summary = await maybeCompress(output, summary)
+
+          // QA 找到問題 → Coder 修正循環（最多 3 輪）
+          if (agentId === 'qa' && !output.includes('REVIEW_RESULT: PASS')) {
+            let qaReport = output
+            let fixRound = 0
+            const coderName = agentNames.coder ?? 'Dev'
+            const qaName = agentNames.qa ?? 'Tester'
+
+            while (!qaReport.includes('REVIEW_RESULT: PASS') && fixRound < 3) {
+              fixRound++
+              emitMsg('manager', 'all', `🔄 ${qaName} 發現問題，請 ${coderName} 修正（第 ${fixRound} 輪）`)
+
+              emitStatus('coder', `${coderName} 根據審查意見修正中...`)
+              const fixContext = buildAgentContext(
+                `根據以下 QA 審查報告修正代碼：\n\n${qaReport}\n\n原始任務：${subTask.task}`,
+                summary
+              )
+              const fixOutput = await runClaudeAgent('coder', fixContext,
+                (chunk) => { if (chunk.trim()) emitStatus('coder', chunk) },
+                projectDir
+              )
+              emitMsg('coder', 'all', fixOutput)
+              completedSteps.push({ agentId: 'coder', task: `修正第 ${fixRound} 輪`, output: fixOutput, completedAt: Date.now() })
+              summary = await maybeCompress(fixOutput, summary)
+
+              emitStatus('qa', `${qaName} 重新審查（第 ${fixRound} 輪）...`)
+              qaReport = await runClaudeAgent('qa',
+                buildAgentContext(`重新審查修正後的代碼。上次問題：\n${qaReport.slice(0, 600)}`, summary),
+                (chunk) => { if (chunk.trim()) emitStatus('qa', chunk) },
+                projectDir
+              )
+              emitMsg('qa', 'all', qaReport)
+              completedSteps.push({ agentId: 'qa', task: `重審第 ${fixRound} 輪`, output: qaReport, completedAt: Date.now() })
+              summary = await maybeCompress(qaReport, summary)
+            }
+
+            if (qaReport.includes('REVIEW_RESULT: PASS')) {
+              emitMsg('manager', 'all', `✅ ${qaName} 確認通過，代碼品質達標。`)
+            } else {
+              emitMsg('manager', 'all', `⚠️ 經過 ${fixRound} 輪修正仍有殘留問題，已記錄，請留意。`)
+            }
+          }
         }
 
         // 3. UX Tester
@@ -191,7 +249,7 @@ ${allOutputs}
         )
 
         send({ type: 'complete', from: 'scribe', to: 'all', content: finalSummary })
-        emitMsg('manager', 'user', `✅ 任務完成！${managerName} 報告：\n${finalSummary}`)
+        emitMsg('manager', 'user', `✅ 任務完成！${managerName} 報告：\n${finalSummary}\n\n---\n這樣有符合你要的嗎？如果有任何需要調整或補充，直接告訴我。`)
 
         // 5. Git commit + 嘗試 push 到 GitHub
         try {

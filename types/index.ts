@@ -3,7 +3,7 @@ export type UserOrAgent = AgentId | 'user'
 export type AgentState = 'idle' | 'thinking' | 'typing' | 'talking' | 'resting' | 'done'
 
 export interface AgentEvent {
-  type: 'message' | 'status' | 'task_assign' | 'complete' | 'error' | 'paused' | 'resumed' | 'dm_reply'
+  type: 'message' | 'status' | 'task_assign' | 'complete' | 'error' | 'paused' | 'resumed' | 'dm_reply' | 'plan'
   from: UserOrAgent
   to: UserOrAgent | 'all'
   content: string
